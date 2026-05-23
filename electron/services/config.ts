@@ -129,6 +129,11 @@ interface ConfigSchema {
   // AI 足迹
   aiFootprintEnabled: boolean
   aiFootprintSystemPrompt: string
+  aiGroupSummaryEnabled: boolean
+  aiGroupSummaryIntervalHours: number
+  aiGroupSummarySystemPrompt: string
+  aiGroupSummaryFilterMode: 'whitelist' | 'blacklist'
+  aiGroupSummaryFilterList: string[]
   aiMessageInsightEnabled: boolean
   aiMessageInsightContextCount: number
   aiMessageInsightSystemPrompt: string
@@ -255,6 +260,11 @@ export class ConfigService {
       aiInsightWeiboBindings: {},
       aiFootprintEnabled: false,
       aiFootprintSystemPrompt: '',
+      aiGroupSummaryEnabled: false,
+      aiGroupSummaryIntervalHours: 4,
+      aiGroupSummarySystemPrompt: '',
+      aiGroupSummaryFilterMode: 'whitelist',
+      aiGroupSummaryFilterList: [],
       aiMessageInsightEnabled: false,
       aiMessageInsightContextCount: 50,
       aiMessageInsightSystemPrompt: '',
@@ -822,6 +832,12 @@ export class ConfigService {
     }
     if (!sharedModel && legacyModel) {
       this.set('aiModelApiModel', legacyModel)
+    }
+
+    const groupSummaryFilterMode = String(this.store.get('aiGroupSummaryFilterMode' as any) || '').trim()
+    if (groupSummaryFilterMode === 'blacklist') {
+      this.store.set('aiGroupSummaryFilterList' as any, [] as any)
+      this.store.set('aiGroupSummaryFilterMode' as any, 'whitelist' as any)
     }
   }
 

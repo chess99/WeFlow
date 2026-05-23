@@ -615,6 +615,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }) => ipcRenderer.invoke('insight:generateMessageInsight', payload)
   },
 
+  groupSummary: {
+    listRecords: (filters?: any) => ipcRenderer.invoke('groupSummary:listRecords', filters),
+    getRecord: (id: string) => ipcRenderer.invoke('groupSummary:getRecord', id),
+    triggerManual: (payload: {
+      sessionId: string
+      displayName?: string
+      avatarUrl?: string
+      startTime: number
+      endTime: number
+    }) => ipcRenderer.invoke('groupSummary:triggerManual', payload),
+    triggerDay: (payload: {
+      sessionId: string
+      displayName?: string
+      avatarUrl?: string
+      date: string
+    }) => ipcRenderer.invoke('groupSummary:triggerDay', payload)
+  },
+
   social: {
     saveWeiboCookie: (rawInput: string) => ipcRenderer.invoke('social:saveWeiboCookie', rawInput),
     validateWeiboUid: (uid: string) => ipcRenderer.invoke('social:validateWeiboUid', uid)
