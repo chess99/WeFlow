@@ -37,7 +37,19 @@ function AnalyticsPage() {
   const [draftExcluded, setDraftExcluded] = useState<Set<string>>(new Set())
 
   const themeMode = useThemeStore((state) => state.themeMode)
-  const { statistics, rankings, timeDistribution, isLoaded, setStatistics, setRankings, setTimeDistribution, markLoaded, clearCache } = useAnalyticsStore()
+  const {
+    statistics,
+    rankings,
+    timeDistribution,
+    selfSentDailyDistribution,
+    isLoaded,
+    setStatistics,
+    setRankings,
+    setTimeDistribution,
+    setSelfSentDailyDistribution,
+    markLoaded,
+    clearCache
+  } = useAnalyticsStore()
 
   const loadExcludedUsernames = useCallback(async () => {
     try {
@@ -54,7 +66,14 @@ function AnalyticsPage() {
   }, [])
 
   const loadData = useCallback(async (forceRefresh = false) => {
-    if (isLoaded && !forceRefresh) return
+    const currentAnalyticsState = useAnalyticsStore.getState()
+    if (
+      currentAnalyticsState.isLoaded &&
+      !forceRefresh &&
+      currentAnalyticsState.statistics &&
+      currentAnalyticsState.timeDistribution &&
+      currentAnalyticsState.selfSentDailyDistribution
+    ) return
     const taskId = registerBackgroundTask({
       sourcePage: 'analytics',
       title: forceRefresh ? '刷新分析看板' : '加载分析看板',
@@ -128,6 +147,22 @@ function AnalyticsPage() {
       if (timeResult.success && timeResult.data) {
         setTimeDistribution(timeResult.data)
       }
+      setLoadingStatus('正在统计每日发送分布...')
+      updateBackgroundTask(taskId, {
+        detail: '正在统计每日发送分布',
+        progressText: '每日发送'
+      })
+      const selfSentDailyResult = await window.electronAPI.analytics.getSelfSentDailyDistribution(0, 0, forceRefresh)
+      if (isBackgroundTaskCancelRequested(taskId)) {
+        finishBackgroundTask(taskId, 'canceled', {
+          detail: '已停止后续加载，每日发送分布结果未继续写入'
+        })
+        setIsLoading(false)
+        return
+      }
+      if (selfSentDailyResult.success && selfSentDailyResult.data) {
+        setSelfSentDailyDistribution(selfSentDailyResult.data)
+      }
       markLoaded()
       finishBackgroundTask(taskId, 'completed', {
         detail: '分析看板数据加载完成',
@@ -142,7 +177,7 @@ function AnalyticsPage() {
       setIsLoading(false)
       if (removeListener) removeListener()
     }
-  }, [isLoaded, markLoaded, setRankings, setStatistics, setTimeDistribution])
+  }, [markLoaded, setRankings, setSelfSentDailyDistribution, setStatistics, setTimeDistribution])
 
   const location = useLocation()
 
@@ -417,6 +452,105 @@ function AnalyticsPage() {
     }
   }
 
+  const getSelfSentDailyRatioData = () => {
+    const entries = Object.entries(selfSentDailyDistribution?.dailyDistribution || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+    const days = entries.map(([day]) => day)
+    const counts = entries.map(([, count]) => count)
+    const totalDays = Math.max(days.length, 1)
+    const total = counts.reduce((sum, count) => sum + count, 0)
+    const baseline = total > 0 ? total / totalDays : 0
+    const ratios = counts.map((count) => baseline > 0 ? Number((count / baseline * 100).toFixed(1)) : 0)
+    const movingAverage = ratios.map((_, index) => {
+      const start = Math.max(0, index - 6)
+      const windowValues = ratios.slice(start, index + 1)
+      const sum = windowValues.reduce((total, value) => total + value, 0)
+      return Number((sum / windowValues.length).toFixed(1))
+    })
+    return { days, counts, ratios, movingAverage, baseline, total }
+  }
+
+  const getSelfSentDailyRatioOption = () => {
+    if (!selfSentDailyDistribution) return {}
+    const { days, counts, ratios, movingAverage, baseline } = getSelfSentDailyRatioData()
+    const showZoom = days.length > 31
+
+    const zoomStart = showZoom ? Math.max(0, 100 - Math.min(100, 31 / days.length * 100)) : 0
+
+    return {
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params]
+          const first = items[0]
+          const index = Number(first?.dataIndex || 0)
+          const lines = [
+            `${first?.axisValue || ''}`,
+            `当日发送：${formatNumber(counts[index] || 0)} 条`,
+            `相对日均：${formatNumber(ratios[index] || 0)}%`,
+            `7日均线：${formatNumber(movingAverage[index] || 0)}%`,
+            `全期日均：${baseline.toFixed(1)} 条/天`
+          ]
+          return lines.join('<br/>')
+        }
+      },
+      legend: { data: ['单日比例', '7日均线'], top: 0 },
+      grid: { left: 56, right: 24, top: 42, bottom: showZoom ? 58 : 32 },
+      xAxis: {
+        type: 'category',
+        data: days,
+        axisLabel: {
+          hideOverlap: true,
+          formatter: (value: string) => value.slice(5)
+        }
+      },
+      yAxis: {
+        type: 'value',
+        name: '相对日均',
+        axisLabel: {
+          formatter: '{value}%'
+        }
+      },
+      dataZoom: showZoom ? [
+        { type: 'inside', start: zoomStart, end: 100 },
+        { type: 'slider', height: 18, bottom: 16, start: zoomStart, end: 100 }
+      ] : undefined,
+      series: [
+        {
+          name: '单日比例',
+          type: 'bar',
+          data: ratios,
+          itemStyle: {
+            color: (params: any) => {
+              const value = Number(params?.value || 0)
+              if (value >= 200) return '#ff4d4f'
+              if (value >= 150) return '#faad14'
+              return '#07c160'
+            },
+            borderRadius: [4, 4, 0, 0]
+          },
+          markLine: {
+            symbol: 'none',
+            data: [{ yAxis: 100, name: '日均基线' }],
+            label: { formatter: '日均基线' },
+            lineStyle: { type: 'dashed', color: '#8c8c8c' }
+          }
+        },
+        {
+          name: '7日均线',
+          type: 'line',
+          data: movingAverage,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2, color: '#1989fa' },
+          itemStyle: { color: '#1989fa' }
+        }
+      ]
+    }
+  }
+
+  const selfSentDailyRatioData = getSelfSentDailyRatioData()
+
   const renderPageShell = (content: ReactNode) => (
     <div className="analytics-page-shell">
       <ChatAnalysisHeader currentMode="private" />
@@ -521,6 +655,16 @@ function AnalyticsPage() {
             <div className="chart-card"><h3>消息类型分布</h3><ReactECharts option={getTypeChartOption()} style={{ height: 300 }} /></div>
             <div className="chart-card"><h3>发送/接收比例</h3><ReactECharts option={getSendReceiveOption()} style={{ height: 300 }} /></div>
             <div className="chart-card wide"><h3>每小时消息分布</h3><ReactECharts option={getHourlyOption()} style={{ height: 250 }} /></div>
+            <div className="chart-card wide">
+              <div className="chart-title-row">
+                <h3>每日自身发送强度比例</h3>
+                <span>范围：全部 · 基线：{selfSentDailyRatioData.baseline.toFixed(1)} 条/天 · 共 {formatNumber(selfSentDailyDistribution?.totalMessages || 0)} 条</span>
+              </div>
+              <div className="chart-note">
+                比例 = 当日自身发送量 ÷ 全期每日平均自身发送量。超过 100% 表示高于本人基线
+              </div>
+              <ReactECharts option={getSelfSentDailyRatioOption()} style={{ height: 320 }} />
+            </div>
           </div>
         </section>
         <section className="page-section">
